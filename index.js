@@ -76,11 +76,19 @@ async function apiPost(action, body) {
       headers: {
         'Content-Type': 'application/json',
         'X-Bot-Secret': BOT_SECRET,
+        'Origin': 'https://ggcoin.tech',
+        'User-Agent': 'CondorBot/1.0',
       },
       body: JSON.stringify(payload),
       timeout: 15_000,
+      redirect: 'follow',
     });
-    return await res.json();
+    const text = await res.text();
+    if (!text.trimStart().startsWith('{') && !text.trimStart().startsWith('[')) {
+      console.error(`[api] ${action} HTTP ${res.status} — unexpected response:`, text.slice(0, 200));
+      return { success: false, error: `http_${res.status}` };
+    }
+    return JSON.parse(text);
   } catch (err) {
     console.error(`[api] ${action} error:`, err.message);
     return { success: false, error: err.message };
