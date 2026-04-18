@@ -22,11 +22,12 @@ const BET_SIZES   = [5, 10, 25, 50, 100];
 const MULTIPLIERS = [2, 3, 6];
 
 // Human-like behaviour knobs
-const BET_PROBABILITY   = 0.70;   // 70 % chance to bet in any given round
+const BET_PROBABILITY   = 0.90;   // 90 % chance to bet in any given round
 const MIN_HEX_COUNT     = 1;
 const MAX_HEX_COUNT     = 3;
-const MIN_BET_DELAY_MS  = 5_000;  // earliest the bot places its bet after round starts
+const MIN_BET_DELAY_MS  = 3_000;  // earliest the bot places its bet after round starts
 const MAX_BET_DELAY_MS  = 45_000; // latest (must be well before round end ~60 s)
+const MIN_TIMER_TO_BET  = 8;      // skip round if fewer than this many seconds remain
 const TOTAL_HEX_COUNT   = 18;     // hex grid size in each lobby
 
 // Reconnect timing
@@ -164,7 +165,7 @@ class LobbyBot {
 
     ws.on('close', (code, reason) => {
       console.warn(`${this.tag} disconnected (${code}), reconnecting in ${this.reconnectDelay}ms`);
-      this._clearBetTimer();
+      this._resetBetState();   // clear betScheduled so we can bet again after reconnect
       this._scheduleReconnect();
     });
 
@@ -230,7 +231,7 @@ class LobbyBot {
     // If we joined mid-round and haven't bet yet, schedule a bet
     if (isNewRound || !this.betScheduled) {
       this._resetBetState();
-      if (msg.timer != null && msg.timer > 10) {
+      if (msg.timer != null && msg.timer > MIN_TIMER_TO_BET) {
         this._maybeScheduleBet(msg.timer);
       }
     }
@@ -293,10 +294,14 @@ class LobbyBot {
 
     this.betScheduled = true;
 
-    // Pick a delay that fits within the remaining round time (leave 10s buffer)
-    const maxDelay = Math.min(MAX_BET_DELAY_MS, Math.max(0, (timerSeconds - 10) * 1000));
+    // Pick a delay that fits within the remaining round time (leave MIN_TIMER_TO_BET buffer)
+    const maxDelay = Math.min(MAX_BET_DELAY_MS, Math.max(0, (timerSeconds - MIN_TIMER_TO_BET) * 1000));
     if (maxDelay < MIN_BET_DELAY_MS) {
-      // Not enough time left, skip
+      // Not enough time left — bet immediately if there's any time at all
+      if (timerSeconds > MIN_TIMER_TO_BET) {
+        this.betTimer = setTimeout(() => this._placeBet(), randInt(500, 1500));
+        return;
+      }
       this.betScheduled = false;
       return;
     }
