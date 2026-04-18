@@ -108,9 +108,10 @@ async function lockBet({ roundId, lobbyKey, betSize, multiplier, hexNums, roundH
   });
 }
 
-async function claimResult({ roundId, seed, winningNumbers }) {
+async function claimResult({ roundId, lobbyKey, seed, winningNumbers }) {
   return apiPost('claim_result', {
     round_id:        roundId,
+    lobby_key:       lobbyKey,
     seed:            seed,
     winning_numbers: winningNumbers,
   });
@@ -165,7 +166,13 @@ class LobbyBot {
 
     ws.on('close', (code, reason) => {
       console.warn(`${this.tag} disconnected (${code}), reconnecting in ${this.reconnectDelay}ms`);
-      this._resetBetState();   // clear betScheduled so we can bet again after reconnect
+      this._clearBetTimer();
+      if (!this.betPlaced || this.myRoundId !== this.roundId) {
+        this.betScheduled = false;
+        this.betPlaced    = false;
+        this.myHexes      = [];
+        this.myRoundId    = null;
+      }
       this._scheduleReconnect();
     });
 
@@ -228,12 +235,14 @@ class LobbyBot {
       msg.positions.forEach(p => { if (p.hexNum) this.takenHexes.add(p.hexNum); });
     }
 
-    // If we joined mid-round and haven't bet yet, schedule a bet
-    if (isNewRound || !this.betScheduled) {
+    if (isNewRound) {
       this._resetBetState();
-      if (msg.timer != null && msg.timer > MIN_TIMER_TO_BET) {
-        this._maybeScheduleBet(msg.timer);
-      }
+    }
+
+    // If we joined mid-round and do not already have a bet in this round, schedule one.
+    const alreadyBetThisRound = this.betPlaced && this.myRoundId === this.roundId;
+    if (!alreadyBetThisRound && !this.betScheduled && msg.timer != null && msg.timer > MIN_TIMER_TO_BET) {
+      this._maybeScheduleBet(msg.timer);
     }
   }
 
@@ -253,6 +262,7 @@ class LobbyBot {
     if (!this.betPlaced || this.myRoundId !== msg.roundId) return;
 
     const roundId        = msg.roundId;
+    const lobbyKey       = msg.lobbyKey || this.lobbyKey;
     const seed           = msg.seed;
     const winningNumbers = msg.winningNumbers;
 
@@ -260,7 +270,7 @@ class LobbyBot {
 
     // Small random delay before claiming (human-like)
     setTimeout(async () => {
-      const result = await claimResult({ roundId, seed, winningNumbers });
+      const result = await claimResult({ roundId, lobbyKey, seed, winningNumbers });
       if (result.success) {
         const won = result.won ? `WON +${result.payout}` : 'lost';
         console.log(`${this.tag} claim: ${won}, balance: ${result.hex_balance}`);
@@ -341,9 +351,13 @@ class LobbyBot {
     }
 
     const tickets = lockRes.bet_tickets || {};
+    const lockedHexes = Object.keys(tickets)
+      .map(v => Number(v))
+      .filter(v => Number.isInteger(v) && v >= 1 && v <= TOTAL_HEX_COUNT);
+    const authoritativeHexes = lockedHexes.length > 0 ? lockedHexes : hexNums;
     let sentCount = 0;
 
-    for (const hexNum of hexNums) {
+    for (const hexNum of authoritativeHexes) {
       const ticket = tickets[String(hexNum)];
       if (!ticket) {
         console.warn(`${this.tag} no ticket for hex ${hexNum}`);
@@ -353,14 +367,14 @@ class LobbyBot {
       this.takenHexes.add(hexNum);
       sentCount++;
       // Tiny stagger between multiple bets (more human-like)
-      if (hexNums.length > 1) await new Promise(r => setTimeout(r, randInt(200, 800)));
+      if (authoritativeHexes.length > 1) await new Promise(r => setTimeout(r, randInt(200, 800)));
     }
 
-    if (sentCount > 0) {
+    if (authoritativeHexes.length > 0) {
       this.betPlaced  = true;
-      this.myHexes    = hexNums;
+      this.myHexes    = authoritativeHexes;
       this.myRoundId  = roundId;
-      console.log(`${this.tag} placed ${sentCount} bet(s) on hex(es) [${hexNums.join(',')}], balance ~${lockRes.hex_balance}`);
+      console.log(`${this.tag} placed ${sentCount} bet(s) on hex(es) [${authoritativeHexes.join(',')}], balance ~${lockRes.hex_balance}${lockRes.idempotent ? ' (idempotent restore)' : ''}`);
     }
   }
 
