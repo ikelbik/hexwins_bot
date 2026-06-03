@@ -96,15 +96,16 @@ async function apiPost(action, body) {
   }
 }
 
-async function lockBet({ roundId, lobbyKey, betSize, multiplier, hexNums, roundHash, roundSig }) {
+async function lockBet({ roundId, lobbyKey, betSize, multiplier, hexNums, roundHash, roundSig, bettingDeadline }) {
   return apiPost('lock_bet', {
-    round_id:   roundId,
-    lobby_key:  lobbyKey,
-    bet_size:   betSize,
-    multiplier: multiplier,
-    hex_nums:   hexNums,
-    round_hash: roundHash,
-    round_sig:  roundSig,
+    round_id:         roundId,
+    lobby_key:        lobbyKey,
+    bet_size:         betSize,
+    multiplier:       multiplier,
+    hex_nums:         hexNums,
+    round_hash:       roundHash,
+    round_sig:        roundSig,
+    betting_deadline: bettingDeadline,
   });
 }
 
@@ -127,9 +128,10 @@ class LobbyBot {
     this.tag        = `[${this.lobbyKey}]`;
 
     // Round state
-    this.roundId   = null;
-    this.roundHash = null;
-    this.roundSig  = null;
+    this.roundId          = null;
+    this.roundHash        = null;
+    this.roundSig         = null;
+    this.bettingDeadline  = null;
     this.takenHexes = new Set();
 
     // Flags
@@ -226,9 +228,10 @@ class LobbyBot {
 
   _onLobbyState(msg) {
     const isNewRound = msg.roundId && msg.roundId !== this.roundId;
-    this.roundId   = msg.roundId   || this.roundId;
-    this.roundHash = msg.hash      || this.roundHash;
-    this.roundSig  = msg.sig       || this.roundSig;
+    this.roundId         = msg.roundId          || this.roundId;
+    this.roundHash       = msg.hash             || this.roundHash;
+    this.roundSig        = msg.sig              || this.roundSig;
+    this.bettingDeadline = msg.bettingDeadline  || this.bettingDeadline;
 
     this.takenHexes.clear();
     if (Array.isArray(msg.positions)) {
@@ -247,9 +250,10 @@ class LobbyBot {
   }
 
   _onNewRound(msg) {
-    this.roundId   = msg.roundId || null;
-    this.roundHash = msg.hash    || null;
-    this.roundSig  = msg.sig     || null;
+    this.roundId         = msg.roundId         || null;
+    this.roundHash       = msg.hash            || null;
+    this.roundSig        = msg.sig             || null;
+    this.bettingDeadline = msg.bettingDeadline || null;
     this.takenHexes.clear();
     this._resetBetState();
     this._maybeScheduleBet(msg.timer || 60);
@@ -336,14 +340,15 @@ class LobbyBot {
       return;
     }
 
-    const roundId    = this.roundId;
-    const roundHash  = this.roundHash;
-    const roundSig   = this.roundSig;
-    const lobbyKey   = this.lobbyKey;
-    const betSize    = this.betSize;
-    const multiplier = this.multiplier;
+    const roundId         = this.roundId;
+    const roundHash       = this.roundHash;
+    const roundSig        = this.roundSig;
+    const bettingDeadline = this.bettingDeadline;
+    const lobbyKey        = this.lobbyKey;
+    const betSize         = this.betSize;
+    const multiplier      = this.multiplier;
 
-    const lockRes = await lockBet({ roundId, lobbyKey, betSize, multiplier, hexNums, roundHash, roundSig });
+    const lockRes = await lockBet({ roundId, lobbyKey, betSize, multiplier, hexNums, roundHash, roundSig, bettingDeadline });
 
     if (!lockRes.success) {
       console.warn(`${this.tag} lock_bet failed:`, lockRes.error || lockRes);
