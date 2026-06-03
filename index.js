@@ -14,8 +14,8 @@ const fetch = require('node-fetch');
 const WS_URL       = process.env.WS_URL       || 'wss://candor-server-production-b41b.up.railway.app';
 const API_BASE     = process.env.API_BASE      || 'https://ggcoin.tech/api2/condor_profile.php';
 const BOT_SECRET   = process.env.BOT_SECRET    || '';   // must match CONDOR_BOT_SECRET in config_candor.php
-const BOT_ID       = parseInt(process.env.BOT_ID || '1', 10);
-const BOT_TELEGRAM_ID = String(10000000000 + BOT_ID);
+const BOT_ID_START = parseInt(process.env.BOT_ID    || '1', 10);
+const BOT_COUNT    = parseInt(process.env.BOT_COUNT || '1', 10);
 
 // Lobbies: all combinations of bet sizes × multipliers
 const BET_SIZES   = [5, 10, 25, 50, 100];
@@ -64,12 +64,11 @@ function pickHexes(count, takenSet) {
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 
-async function apiPost(action, body) {
+async function apiPost(action, body, telegramId) {
   const url = `${API_BASE}?action=${action}`;
   const payload = {
     ...body,
-    telegram_id: BOT_TELEGRAM_ID,
-    bot_id: String(BOT_ID),
+    telegram_id: telegramId,
   };
   try {
     const res = await fetch(url, {
@@ -96,7 +95,7 @@ async function apiPost(action, body) {
   }
 }
 
-async function lockBet({ roundId, lobbyKey, betSize, multiplier, hexNums, roundHash, roundSig, bettingDeadline }) {
+async function lockBet({ telegramId, roundId, lobbyKey, betSize, multiplier, hexNums, roundHash, roundSig, bettingDeadline }) {
   return apiPost('lock_bet', {
     round_id:         roundId,
     lobby_key:        lobbyKey,
@@ -106,10 +105,10 @@ async function lockBet({ roundId, lobbyKey, betSize, multiplier, hexNums, roundH
     round_hash:       roundHash,
     round_sig:        roundSig,
     betting_deadline: bettingDeadline,
-  });
+  }, telegramId);
 }
 
-async function claimResult({ roundId, lobbyKey, seed, winningNumbers, winners, winnersSig }) {
+async function claimResult({ telegramId, roundId, lobbyKey, seed, winningNumbers, winners, winnersSig }) {
   return apiPost('claim_result', {
     round_id:        roundId,
     lobby_key:       lobbyKey,
@@ -117,17 +116,18 @@ async function claimResult({ roundId, lobbyKey, seed, winningNumbers, winners, w
     winning_numbers: winningNumbers,
     winners:         winners,
     winners_sig:     winnersSig,
-  });
+  }, telegramId);
 }
 
 // ─── LobbyBot ─────────────────────────────────────────────────────────────────
 
 class LobbyBot {
-  constructor(betSize, multiplier) {
-    this.betSize    = betSize;
-    this.multiplier = multiplier;
-    this.lobbyKey   = `${betSize}x${multiplier}`;
-    this.tag        = `[${this.lobbyKey}]`;
+  constructor(betSize, multiplier, telegramId) {
+    this.betSize      = betSize;
+    this.multiplier   = multiplier;
+    this.telegramId   = telegramId;
+    this.lobbyKey     = `${betSize}x${multiplier}`;
+    this.tag          = `[${this.lobbyKey}|${telegramId.slice(-4)}]`;
 
     // Round state
     this.roundId          = null;
@@ -202,7 +202,7 @@ class LobbyBot {
       type:       'join_lobby',
       betSize:    this.betSize,
       multiplier: this.multiplier,
-      playerId:   BOT_TELEGRAM_ID,
+      playerId:   this.telegramId,
     });
   }
 
@@ -278,7 +278,7 @@ class LobbyBot {
 
     // Small random delay before claiming (human-like)
     setTimeout(async () => {
-      const result = await claimResult({ roundId, lobbyKey, seed, winningNumbers, winners, winnersSig });
+      const result = await claimResult({ telegramId: this.telegramId, roundId, lobbyKey, seed, winningNumbers, winners, winnersSig });
       if (result.success) {
         const won = result.won ? `WON +${result.payout}` : 'lost';
         console.log(`${this.tag} claim: ${won}, balance: ${result.hex_balance}`);
@@ -352,7 +352,7 @@ class LobbyBot {
     const betSize         = this.betSize;
     const multiplier      = this.multiplier;
 
-    const lockRes = await lockBet({ roundId, lobbyKey, betSize, multiplier, hexNums, roundHash, roundSig, bettingDeadline });
+    const lockRes = await lockBet({ telegramId: this.telegramId, roundId, lobbyKey, betSize, multiplier, hexNums, roundHash, roundSig, bettingDeadline });
 
     if (!lockRes.success) {
       console.warn(`${this.tag} lock_bet failed:`, lockRes.error || lockRes);
@@ -396,18 +396,21 @@ class LobbyBot {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-console.log(`[bot] Starting Condor bot (telegram_id=${BOT_TELEGRAM_ID})`);
+console.log(`[bot] Starting Condor bot (ids=${BOT_ID_START}…${BOT_ID_START + BOT_COUNT - 1}, count=${BOT_COUNT})`);
 console.log(`[bot] WS: ${WS_URL}`);
 console.log(`[bot] API: ${API_BASE}`);
-console.log(`[bot] Lobbies: ${BET_SIZES.length} bet sizes × ${MULTIPLIERS.length} multipliers = ${BET_SIZES.length * MULTIPLIERS.length} connections`);
+console.log(`[bot] Total WS connections: ${BOT_COUNT} bots × ${BET_SIZES.length * MULTIPLIERS.length} lobbies = ${BOT_COUNT * BET_SIZES.length * MULTIPLIERS.length}`);
 
 const bots = [];
-for (const betSize of BET_SIZES) {
-  for (const multiplier of MULTIPLIERS) {
-    // Stagger connections slightly so we don't hammer the server at startup
-    setTimeout(() => {
-      bots.push(new LobbyBot(betSize, multiplier));
-    }, randInt(0, 3000));
+for (let i = 0; i < BOT_COUNT; i++) {
+  const telegramId = String(10000000000 + BOT_ID_START + i);
+  for (const betSize of BET_SIZES) {
+    for (const multiplier of MULTIPLIERS) {
+      // Stagger connections across all bots so we don't hammer the server at startup
+      setTimeout(() => {
+        bots.push(new LobbyBot(betSize, multiplier, telegramId));
+      }, randInt(0, 5000 + i * 1000));
+    }
   }
 }
 
