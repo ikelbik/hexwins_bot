@@ -109,12 +109,14 @@ async function lockBet({ roundId, lobbyKey, betSize, multiplier, hexNums, roundH
   });
 }
 
-async function claimResult({ roundId, lobbyKey, seed, winningNumbers }) {
+async function claimResult({ roundId, lobbyKey, seed, winningNumbers, winners, winnersSig }) {
   return apiPost('claim_result', {
     round_id:        roundId,
     lobby_key:       lobbyKey,
     seed:            seed,
     winning_numbers: winningNumbers,
+    winners:         winners,
+    winners_sig:     winnersSig,
   });
 }
 
@@ -269,12 +271,14 @@ class LobbyBot {
     const lobbyKey       = msg.lobbyKey || this.lobbyKey;
     const seed           = msg.seed;
     const winningNumbers = msg.winningNumbers;
+    const winners        = msg.winners;
+    const winnersSig     = msg.winnersSig;
 
-    if (!roundId || !seed || !Array.isArray(winningNumbers)) return;
+    if (!roundId || !seed || !Array.isArray(winningNumbers) || !Array.isArray(winners) || !winnersSig) return;
 
     // Small random delay before claiming (human-like)
     setTimeout(async () => {
-      const result = await claimResult({ roundId, lobbyKey, seed, winningNumbers });
+      const result = await claimResult({ roundId, lobbyKey, seed, winningNumbers, winners, winnersSig });
       if (result.success) {
         const won = result.won ? `WON +${result.payout}` : 'lost';
         console.log(`${this.tag} claim: ${won}, balance: ${result.hex_balance}`);
