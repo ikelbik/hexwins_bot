@@ -127,7 +127,8 @@ class LobbyBot {
     this.multiplier   = multiplier;
     this.telegramId   = telegramId;
     this.lobbyKey     = `${betSize}x${multiplier}`;
-    this.tag          = `[${this.lobbyKey}|${telegramId.slice(-4)}]`;
+    const botNum      = parseInt(telegramId, 10) - 10000000000;
+    this.tag          = `[bot${botNum}|${this.lobbyKey}]`;
 
     // Round state
     this.roundId          = null;
